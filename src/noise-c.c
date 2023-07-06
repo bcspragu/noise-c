@@ -1,13 +1,13 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "noise/protocol.h"
+#include <noise/protocol.h>
 
 /* Message buffer for send/receive */
 #define MAX_MESSAGE_LEN 4096
 static uint8_t message[MAX_MESSAGE_LEN + 2];
 
-int TestHandshake() {
+int test_handshake() {
     int err = noise_init();
     if (err != NOISE_ERROR_NONE) {
         noise_perror("Noise initialization failed", err);
@@ -105,4 +105,8 @@ int TestHandshake() {
     handshake = 0;
     
     return 0;
+}
+
+int main() {
+    test_handshake();
 }

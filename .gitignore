@@ -19,3 +19,5 @@ test-driver
 ylwrap
 *.wasm
 *.worker.js
+*.out.js
+/src/noise-test

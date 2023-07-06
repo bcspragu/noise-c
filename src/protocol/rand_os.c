@@ -48,7 +48,7 @@
  * This module will require modification when porting to new systems.
  */
 
-#if defined(linux) || defined(__linux) || defined(__linux__) || defined(__APPLE__)
+#if defined(linux) || defined(__linux) || defined(__linux__) || defined(__APPLE__) || defined(__EMSCRIPTEN__)
 #define RANDOM_DEVICE   "/dev/urandom"
 #endif
 #if defined(__WIN32__) || defined(WIN32) || defined(__CYGWIN32__)

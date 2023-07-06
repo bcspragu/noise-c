@@ -1,3 +1,9 @@
+Note: This fork is an attempt to compile a recent version of Noise-C to WASM with Emscripten, and add some project-specific bindings to expose a minimal surface area. I don't expect anything in this fork to be generally useful.
+
+TODO
+
+- [ ] Try compiling `src/noise-c.c` with WASM
+- [ ] Figure out the interface we need to expose for our handshake/message sending
 
 Noise-C Library
 ===============

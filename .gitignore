@@ -17,3 +17,5 @@ missing
 test-driver
 .dirstamp
 ylwrap
+*.wasm
+*.worker.js

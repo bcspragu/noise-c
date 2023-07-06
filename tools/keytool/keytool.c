@@ -95,6 +95,22 @@ void report_error(const char *file, long line, int err)
     fprintf(stderr, "Internal error (%s:%ld): %s\n", file, line, errstr);
 }
 
+// Note: This function is added as a shim so Emscripten doesn't fail with:
+//
+//   wasm-ld: error: keytool.o: undefined symbol: getpass
+//
+// It's gross, but it's perhaps preferable to just deleting the tool.
+char *getpass(const char *prompt) {
+    static char buf[256];
+    printf("%s", prompt);
+    if (fgets(buf, sizeof(buf), stdin) == NULL)
+        return NULL;
+    char *newline = strchr(buf, '\n');
+    if (newline != NULL)
+        *newline = '\0';
+    return buf;
+}
+
 char *ask_for_passphrase(int confirm)
 {
 #if defined(__WIN32__) || defined(WIN32) || defined(__ANDROID__)

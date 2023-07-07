@@ -59,8 +59,8 @@ StartHandshakeResponse *start_handshake() {
     // The NN handshake only uses ephemeral keys, e.g.
     //   -> e 
     //   <- e, ee
-    NoiseDHState *dh = noise_handshakestate_get_fixed_ephemeral_dh(handshake);
-    size_t key_len = noise_dhstate_generate_keypair(dh);
+    // NoiseDHState *dh = noise_handshakestate_get_fixed_ephemeral_dh(handshake);
+    // size_t key_len = noise_dhstate_generate_keypair(dh);
 
     err = noise_handshakestate_start(handshake);
     if (err != NOISE_ERROR_NONE) {
@@ -71,10 +71,7 @@ StartHandshakeResponse *start_handshake() {
     
     int action = noise_handshakestate_get_action(handshake);
     if (action != NOISE_ACTION_WRITE_MESSAGE) {
-        int length = snprintf( NULL, 0, "unexpected action %d", action );
-        char* str = malloc( length + 1 );
-        snprintf( str, length + 1, "%d", action );
-        noise_perror(str, err);
+        fprintf(stderr, "unexpected action %d\n", action);
         resp->error_code = ERROR_CODE_UNEXPECTED_ACTION;
         return resp;
     }
@@ -136,8 +133,8 @@ ContinueHandshakeResponse *continue_handshake(uint8_t *message, size_t message_s
     // The NN handshake only uses ephemeral keys, e.g.
     //   -> e 
     //   <- e, ee
-    NoiseDHState *dh = noise_handshakestate_get_fixed_ephemeral_dh(handshake);
-    size_t key_len = noise_dhstate_generate_keypair(dh);
+    // NoiseDHState *dh = noise_handshakestate_get_fixed_ephemeral_dh(handshake);
+    // size_t key_len = noise_dhstate_generate_keypair(dh);
 
     err = noise_handshakestate_start(handshake);
     if (err != NOISE_ERROR_NONE) {
@@ -146,12 +143,10 @@ ContinueHandshakeResponse *continue_handshake(uint8_t *message, size_t message_s
         return resp;
     }
 
+    // Our first action is to read the initiator's part of the handshake.
     int action = noise_handshakestate_get_action(handshake);
     if (action != NOISE_ACTION_READ_MESSAGE) {
-        int length = snprintf( NULL, 0, "unexpected action %d", action );
-        char* str = malloc( length + 1 );
-        snprintf( str, length + 1, "%d", action );
-        noise_perror(str, err);
+        fprintf(stderr, "unexpected action %d\n", action);
         resp->error_code = ERROR_CODE_UNEXPECTED_ACTION;
         return resp;
     }
@@ -164,12 +159,29 @@ ContinueHandshakeResponse *continue_handshake(uint8_t *message, size_t message_s
         resp->error_code = ERROR_CODE_READ_MESSAGE;
         return resp;
     }
+    
+    // Our second action should be to write our responder's part of the handshake.
+    action = noise_handshakestate_get_action(handshake);
+    if (action != NOISE_ACTION_WRITE_MESSAGE) {
+        fprintf(stderr, "unexpected action %d\n", action);
+        resp->error_code = ERROR_CODE_UNEXPECTED_ACTION;
+        return resp;
+    }
 
+    noise_buffer_set_output(mbuf, message_buffer, sizeof(message_buffer));
+    err = noise_handshakestate_write_message(handshake, &mbuf, NULL);
+    if (err != NOISE_ERROR_NONE) {
+        noise_perror("write handshake", err);
+        resp->error_code = ERROR_CODE_WRITE_MESSAGE;
+        return resp;
+    }
+
+    // Our third action should be to split into tx/rx cipher states.
     action = noise_handshakestate_get_action(handshake);
     if (action != NOISE_ACTION_SPLIT) {
         int length = snprintf( NULL, 0, "action was %d", action );
         char* str = malloc( length + 1 );
-        snprintf( str, length + 1, "%d", action );
+        snprintf( str, length + 1, "action was %d", action );
         noise_perror(str, err);
         resp->error_code = ERROR_CODE_UNEXPECTED_ACTION;
         return resp;

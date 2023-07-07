@@ -1,3 +1,4 @@
+#include "protocol/internal.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -20,12 +21,20 @@ static uint8_t message_buffer[MAX_MESSAGE_LEN];
 #define ERROR_CODE_XX                0x0B
 #define ERROR_CODE_IX                0x0C
 
+// TODO: Fill this out with the state we need to serialize.
+typedef struct {
+    // Symmetric state
+    uint8_t ck[64];
+    uint8_t h[64];
+
+} HandshakeState;
+
 typedef struct {
     uint32_t error_code;
     size_t message_size;
     uint8_t *message;
     // TODO: Figure out how to do this correctly.
-    // NoiseHandshakeState *handshake;
+    // HandshakeState *hs;
 } StartHandshakeResponse;
 
 StartHandshakeResponse *start_handshake() {

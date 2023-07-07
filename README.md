@@ -30,7 +30,7 @@ emcc -O2 src/noise-c.o \
   -Lsrc/protocol \
   -lnoise \
   -lnoiseprotocol \
-  -sEXPORTED_FUNCTIONS=_start_handshake,_continue_handshake,_malloc,_free \
+  -sEXPORTED_FUNCTIONS=_start_handshake,_continue_handshake,_finish_handshake,_malloc,_free \
   -ssEXPORTED_RUNTIME_METHODS=cwrap,getValue,UTF8ToString,stringToUTF8 \
   -sMODULARIZE
 ```

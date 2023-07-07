@@ -1,3 +1,4 @@
+#include "noise/protocol/handshakestate.h"
 #include "protocol/internal.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -16,10 +17,13 @@ static uint8_t message_buffer[MAX_MESSAGE_LEN];
 #define ERROR_CODE_WRITE_MESSAGE     0x06
 #define ERROR_CODE_READ_MESSAGE      0x07
 #define ERROR_CODE_SPLIT_FAILED      0x08
-#define ERROR_CODE_XK                0x09
+#define ERROR_CODE_NO_GLOBAL_STATE   0x09
 #define ERROR_CODE_IK                0x0A
 #define ERROR_CODE_XX                0x0B
 #define ERROR_CODE_IX                0x0C
+
+// TODO: Remove this egregious hack, it's just to test the handshake before we have support for serializing/saving handshake data.
+static NoiseHandshakeState *global_handshake;
 
 // TODO: Fill this out with the state we need to serialize.
 typedef struct {
@@ -100,6 +104,8 @@ StartHandshakeResponse *start_handshake() {
     resp->error_code = 0;
     // resp->handshake = handshake;
 
+    global_handshake = handshake;
+
     return resp;
 }
 
@@ -108,7 +114,7 @@ typedef struct {
     size_t message_size;
     uint8_t *message;
     // TODO: Figure out how to do this correctly.
-    // NoiseHandshakeState *handshake;
+    // HandshakeState *hs;
 } ContinueHandshakeResponse;
 
 ContinueHandshakeResponse *continue_handshake(uint8_t *message, size_t message_size) {
@@ -188,10 +194,7 @@ ContinueHandshakeResponse *continue_handshake(uint8_t *message, size_t message_s
     // Our third action should be to split into tx/rx cipher states.
     action = noise_handshakestate_get_action(handshake);
     if (action != NOISE_ACTION_SPLIT) {
-        int length = snprintf( NULL, 0, "action was %d", action );
-        char* str = malloc( length + 1 );
-        snprintf( str, length + 1, "action was %d", action );
-        noise_perror(str, err);
+        fprintf(stderr, "unexpected action %d\n", action);
         resp->error_code = ERROR_CODE_UNEXPECTED_ACTION;
         return resp;
     }
@@ -215,4 +218,57 @@ ContinueHandshakeResponse *continue_handshake(uint8_t *message, size_t message_s
 
 int main() {
     start_handshake();
+}
+
+typedef struct {
+    uint32_t error_code;
+    // TODO: Figure out how to do this correctly.
+    // HandshakeState *hs;
+} FinishHandshakeResponse;
+
+FinishHandshakeResponse *finish_handshake(uint8_t *message, size_t message_size) {
+    FinishHandshakeResponse *resp = malloc(sizeof(FinishHandshakeResponse));
+
+    if (!global_handshake) {
+        resp->error_code = ERROR_CODE_NO_GLOBAL_STATE;
+        return resp;
+    }
+
+    NoiseHandshakeState *handshake = global_handshake;
+
+    // Our first action is to read the responder's part of the handshake.
+    int action = noise_handshakestate_get_action(handshake);
+    if (action != NOISE_ACTION_READ_MESSAGE) {
+        fprintf(stderr, "unexpected action %d\n", action);
+        resp->error_code = ERROR_CODE_UNEXPECTED_ACTION;
+        return resp;
+    }
+
+    NoiseBuffer mbuf;
+    noise_buffer_set_input(mbuf, message, message_size);
+    int err = noise_handshakestate_read_message(handshake, &mbuf, NULL);
+    if (err != NOISE_ERROR_NONE) {
+        noise_perror("read handshake", err);
+        resp->error_code = ERROR_CODE_READ_MESSAGE;
+        return resp;
+    }
+    
+    // Our second action should be to split into tx/rx cipher states.
+    action = noise_handshakestate_get_action(handshake);
+    if (action != NOISE_ACTION_SPLIT) {
+        fprintf(stderr, "unexpected action %d\n", action);
+        resp->error_code = ERROR_CODE_UNEXPECTED_ACTION;
+        return resp;
+    }
+
+    NoiseCipherState *send_cipher = 0;
+    NoiseCipherState *recv_cipher = 0;
+    err = noise_handshakestate_split(handshake, &send_cipher, &recv_cipher);
+    if (err != NOISE_ERROR_NONE) {
+        noise_perror("split to start data transfer", err);
+        resp->error_code = ERROR_CODE_SPLIT_FAILED;
+        return resp;
+    }
+
+    return resp;
 }

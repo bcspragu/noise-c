@@ -5,13 +5,37 @@
 
 /* Message buffer for send/receive */
 #define MAX_MESSAGE_LEN 4096
-static uint8_t message[MAX_MESSAGE_LEN + 2];
+static uint8_t message_buffer[MAX_MESSAGE_LEN];
 
-int test_handshake() {
+#define ERROR_CODE_NOISE_INIT        0x01
+#define ERROR_CODE_NEW_HANDSHAKE     0x02
+#define ERROR_CODE_SET_PROLOGUE      0x03
+#define ERROR_CODE_HANDSHAKE_START   0x04
+#define ERROR_CODE_UNEXPECTED_ACTION 0x05
+#define ERROR_CODE_WRITE_MESSAGE     0x06
+#define ERROR_CODE_READ_MESSAGE      0x07
+#define ERROR_CODE_SPLIT_FAILED      0x08
+#define ERROR_CODE_XK                0x09
+#define ERROR_CODE_IK                0x0A
+#define ERROR_CODE_XX                0x0B
+#define ERROR_CODE_IX                0x0C
+
+typedef struct {
+    uint32_t error_code;
+    size_t message_size;
+    uint8_t *message;
+    // TODO: Figure out how to do this correctly.
+    // NoiseHandshakeState *handshake;
+} StartHandshakeResponse;
+
+StartHandshakeResponse *start_handshake() {
+    StartHandshakeResponse *resp = malloc(sizeof(StartHandshakeResponse));
+
     int err = noise_init();
     if (err != NOISE_ERROR_NONE) {
         noise_perror("Noise initialization failed", err);
-        return 1;
+        resp->error_code = ERROR_CODE_NOISE_INIT;
+        return resp;
     }
 
     NoiseHandshakeState *handshake;
@@ -20,75 +44,135 @@ int test_handshake() {
         (&handshake, protocol, NOISE_ROLE_INITIATOR);
     if (err != NOISE_ERROR_NONE) {
         noise_perror(protocol, err);
-        return 1;
+        resp->error_code = ERROR_CODE_NEW_HANDSHAKE;
+        return resp;
     }
 
     char *prologue = "InkLinkv1";
     err = noise_handshakestate_set_prologue(handshake, prologue, strlen(prologue));
     if (err != NOISE_ERROR_NONE) {
         noise_perror(protocol, err);
-        return 1;
+        resp->error_code = ERROR_CODE_SET_PROLOGUE;
+        return resp;
     }
 
     // The NN handshake only uses ephemeral keys, e.g.
-      // -> e 
-      // <- e, ee
+    //   -> e 
+    //   <- e, ee
     NoiseDHState *dh = noise_handshakestate_get_fixed_ephemeral_dh(handshake);
-    int key_len = noise_dhstate_generate_keypair(dh);
+    size_t key_len = noise_dhstate_generate_keypair(dh);
 
     err = noise_handshakestate_start(handshake);
     if (err != NOISE_ERROR_NONE) {
         noise_perror("start handshake", err);
-        return 1;
+        resp->error_code = ERROR_CODE_HANDSHAKE_START;
+        return resp;
     }
     
-    int ok = 1;
-    int action;
+    int action = noise_handshakestate_get_action(handshake);
+    if (action != NOISE_ACTION_WRITE_MESSAGE) {
+        int length = snprintf( NULL, 0, "unexpected action %d", action );
+        char* str = malloc( length + 1 );
+        snprintf( str, length + 1, "%d", action );
+        noise_perror(str, err);
+        resp->error_code = ERROR_CODE_UNEXPECTED_ACTION;
+        return resp;
+    }
+
+    /* Write the next handshake message with a zero-length payload */
     NoiseBuffer mbuf;
-    while (ok) {
-        action = noise_handshakestate_get_action(handshake);
-        if (action == NOISE_ACTION_WRITE_MESSAGE) {
-            /* Write the next handshake message with a zero-length payload */
-            noise_buffer_set_output(mbuf, message + 2, sizeof(message) - 2);
-            err = noise_handshakestate_write_message(handshake, &mbuf, NULL);
-            if (err != NOISE_ERROR_NONE) {
-                noise_perror("write handshake", err);
-                ok = 0;
-                break;
-            }
-            message[0] = (uint8_t)(mbuf.size >> 8);
-            message[1] = (uint8_t)mbuf.size;
+    noise_buffer_set_output(mbuf, message_buffer, sizeof(message_buffer));
+    err = noise_handshakestate_write_message(handshake, &mbuf, NULL);
+    if (err != NOISE_ERROR_NONE) {
+        noise_perror("write handshake", err);
+        resp->error_code = ERROR_CODE_WRITE_MESSAGE;
+        return resp;
+    }
 
-            // TODO: THIS IS WHERE WE SEND THE MESSAGE TO THE SERVER
-        } else if (action == NOISE_ACTION_READ_MESSAGE) {
-            /* Read the next handshake message and discard the payload */
+    resp->message_size = mbuf.size;
+    resp->message = &message_buffer[0];
+    resp->error_code = 0;
+    // resp->handshake = handshake;
 
-            // TODO: THIS IS WHERE WE LOAD THE MESSAGE FROM THE SERVER
-            // message_size = echo_recv(fd, message, sizeof(message));
-            // if (!message_size) {
-            //     ok = 0;
-            //     break;
-            // }
-            // noise_buffer_set_input(mbuf, message + 2, message_size - 2);
-            // err = noise_handshakestate_read_message(handshake, &mbuf, NULL);
-            // if (err != NOISE_ERROR_NONE) {
-            //     noise_perror("read handshake", err);
-            //     ok = 0;
-            //     break;
-            // }
-        } else {
-            /* Either the handshake has finished or it has failed */
-            break;
-        }
+    return resp;
+}
+
+typedef struct {
+    uint32_t error_code;
+    size_t message_size;
+    uint8_t *message;
+    // TODO: Figure out how to do this correctly.
+    // NoiseHandshakeState *handshake;
+} ContinueHandshakeResponse;
+
+ContinueHandshakeResponse *continue_handshake(uint8_t *message, size_t message_size) {
+    ContinueHandshakeResponse *resp = malloc(sizeof(ContinueHandshakeResponse));
+
+    int err = noise_init();
+    if (err != NOISE_ERROR_NONE) {
+        noise_perror("Noise initialization failed", err);
+        resp->error_code = ERROR_CODE_NOISE_INIT;
+        return resp;
+    }
+
+    NoiseHandshakeState *handshake;
+    char *protocol = "Noise_NN_25519_ChaChaPoly_BLAKE2s";
+    err = noise_handshakestate_new_by_name
+        (&handshake, protocol, NOISE_ROLE_RESPONDER);
+    if (err != NOISE_ERROR_NONE) {
+        noise_perror(protocol, err);
+        resp->error_code = ERROR_CODE_NEW_HANDSHAKE;
+        return resp;
+    }
+
+    char *prologue = "InkLinkv1";
+    err = noise_handshakestate_set_prologue(handshake, prologue, strlen(prologue));
+    if (err != NOISE_ERROR_NONE) {
+        noise_perror(protocol, err);
+        resp->error_code = ERROR_CODE_SET_PROLOGUE;
+        return resp;
+    }
+
+    // The NN handshake only uses ephemeral keys, e.g.
+    //   -> e 
+    //   <- e, ee
+    NoiseDHState *dh = noise_handshakestate_get_fixed_ephemeral_dh(handshake);
+    size_t key_len = noise_dhstate_generate_keypair(dh);
+
+    err = noise_handshakestate_start(handshake);
+    if (err != NOISE_ERROR_NONE) {
+        noise_perror("start handshake", err);
+        resp->error_code = ERROR_CODE_HANDSHAKE_START;
+        return resp;
+    }
+
+    int action = noise_handshakestate_get_action(handshake);
+    if (action != NOISE_ACTION_READ_MESSAGE) {
+        int length = snprintf( NULL, 0, "unexpected action %d", action );
+        char* str = malloc( length + 1 );
+        snprintf( str, length + 1, "%d", action );
+        noise_perror(str, err);
+        resp->error_code = ERROR_CODE_UNEXPECTED_ACTION;
+        return resp;
+    }
+
+    NoiseBuffer mbuf;
+    noise_buffer_set_input(mbuf, message, message_size);
+    err = noise_handshakestate_read_message(handshake, &mbuf, NULL);
+    if (err != NOISE_ERROR_NONE) {
+        noise_perror("read handshake", err);
+        resp->error_code = ERROR_CODE_READ_MESSAGE;
+        return resp;
     }
 
     action = noise_handshakestate_get_action(handshake);
-    if (ok &&  action != NOISE_ACTION_SPLIT) {
+    if (action != NOISE_ACTION_SPLIT) {
         int length = snprintf( NULL, 0, "action was %d", action );
         char* str = malloc( length + 1 );
         snprintf( str, length + 1, "%d", action );
         noise_perror(str, err);
-        return 1;
+        resp->error_code = ERROR_CODE_UNEXPECTED_ACTION;
+        return resp;
     }
 
     NoiseCipherState *send_cipher = 0;
@@ -96,17 +180,18 @@ int test_handshake() {
     err = noise_handshakestate_split(handshake, &send_cipher, &recv_cipher);
     if (err != NOISE_ERROR_NONE) {
         noise_perror("split to start data transfer", err);
-        ok = 0;
+        resp->error_code = ERROR_CODE_SPLIT_FAILED;
+        return resp;
     }
 
-    // At this point, the handshake is complete and we can free the handshake state
-    // and use the cipher states to send and receive messages.
-    noise_handshakestate_free(handshake);
-    handshake = 0;
-    
-    return 0;
+    resp->message_size = mbuf.size;
+    resp->message = &message_buffer[0];
+    resp->error_code = 0;
+    // resp->handshake = handshake;
+
+    return resp;
 }
 
 int main() {
-    test_handshake();
+    start_handshake();
 }

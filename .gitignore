@@ -21,3 +21,5 @@ ylwrap
 *.worker.js
 *.out.js
 /src/noise-test
+output.js
+output.mjs

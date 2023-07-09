@@ -18,12 +18,15 @@ static uint8_t message_buffer[MAX_MESSAGE_LEN];
 #define ERROR_CODE_READ_MESSAGE      0x07
 #define ERROR_CODE_SPLIT_FAILED      0x08
 #define ERROR_CODE_NO_GLOBAL_STATE   0x09
-#define ERROR_CODE_IK                0x0A
-#define ERROR_CODE_XX                0x0B
-#define ERROR_CODE_IX                0x0C
+#define ERROR_CODE_ENCRYPT_FAILED    0x0A
+#define ERROR_CODE_DECRYPT_FAILED    0x0B
+// #define ERROR_CODE_IX                0x0C
 
 // TODO: Remove this egregious hack, it's just to test the handshake before we have support for serializing/saving handshake data.
 static NoiseHandshakeState *global_handshake;
+
+static NoiseCipherState *send_cipher;
+static NoiseCipherState *recv_cipher;
 
 // TODO: Fill this out with the state we need to serialize.
 typedef struct {
@@ -199,8 +202,8 @@ ContinueHandshakeResponse *continue_handshake(uint8_t *message, size_t message_s
         return resp;
     }
 
-    NoiseCipherState *send_cipher = 0;
-    NoiseCipherState *recv_cipher = 0;
+    // NoiseCipherState *send_cipher = 0;
+    // NoiseCipherState *recv_cipher = 0;
     err = noise_handshakestate_split(handshake, &send_cipher, &recv_cipher);
     if (err != NOISE_ERROR_NONE) {
         noise_perror("split to start data transfer", err);
@@ -261,14 +264,76 @@ FinishHandshakeResponse *finish_handshake(uint8_t *message, size_t message_size)
         return resp;
     }
 
-    NoiseCipherState *send_cipher = 0;
-    NoiseCipherState *recv_cipher = 0;
+    // NoiseCipherState *send_cipher = 0;
+    // NoiseCipherState *recv_cipher = 0;
     err = noise_handshakestate_split(handshake, &send_cipher, &recv_cipher);
     if (err != NOISE_ERROR_NONE) {
         noise_perror("split to start data transfer", err);
         resp->error_code = ERROR_CODE_SPLIT_FAILED;
         return resp;
     }
+
+    return resp;
+}
+
+typedef struct {
+    uint32_t error_code;
+    size_t message_size;
+    uint8_t *message;
+} EncryptMessageResponse;
+
+EncryptMessageResponse *encrypt_message(uint8_t *message, size_t message_size) {
+    EncryptMessageResponse *resp = malloc(sizeof(EncryptMessageResponse));
+
+    if (!send_cipher || !recv_cipher) {
+        resp->error_code = ERROR_CODE_NO_GLOBAL_STATE;
+        return resp;
+    }
+
+    NoiseBuffer mbuf;
+    memcpy(message_buffer, message, message_size);
+    noise_buffer_set_inout(mbuf, message_buffer, message_size, sizeof(message_buffer));
+    int err = noise_cipherstate_encrypt(send_cipher, &mbuf);
+    if (err != NOISE_ERROR_NONE) {
+        noise_perror("encryption failed", err);
+        resp->error_code = ERROR_CODE_ENCRYPT_FAILED;
+        return resp;
+    }
+   
+    resp->message_size = mbuf.size;
+    resp->message = mbuf.data;
+    resp->error_code = 0;
+
+    return resp;
+}
+
+typedef struct {
+    uint32_t error_code;
+    size_t message_size;
+    uint8_t *message;
+} DecryptMessageResponse;
+
+DecryptMessageResponse *decrypt_message(uint8_t *message, size_t message_size) {
+    DecryptMessageResponse *resp = malloc(sizeof(DecryptMessageResponse));
+
+    if (!send_cipher || !recv_cipher) {
+        resp->error_code = ERROR_CODE_NO_GLOBAL_STATE;
+        return resp;
+    }
+
+    NoiseBuffer mbuf;
+    memcpy(message_buffer, message, message_size);
+    noise_buffer_set_inout(mbuf, message_buffer, message_size, sizeof(message_buffer));
+    int err = noise_cipherstate_decrypt(recv_cipher, &mbuf);
+    if (err != NOISE_ERROR_NONE) {
+        noise_perror("decryption failed", err);
+        resp->error_code = ERROR_CODE_DECRYPT_FAILED;
+        return resp;
+    }
+   
+    resp->message_size = mbuf.size;
+    resp->message = mbuf.data;
+    resp->error_code = 0;
 
     return resp;
 }

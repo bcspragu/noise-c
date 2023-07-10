@@ -6,10 +6,14 @@ For example, I still need to confirm that Emscripten is actually using a reasona
 
 TODO
 
-- [ ] Try calling the WASM from actual JS code
+- [ ] Figure out how/where to persist state
+- [ ] Add message padding support
+  - This also requires good randomness, so make sure that part works (see below)
 - [ ] Figure out how to build for WASM against libsodium
 - [ ] Make output as small/minimal as possible
 - [ ] Figure out if /dev/urandom usage is an acceptable source of entropy in Emscripten
+  - Should generate a bunch of random numbers with it and run through some test suite, use different browsers.
+- [x] Try calling the WASM from actual JS code
 - [x] Try compiling `src/noise-c.c` with WASM
 - [x] Figure out the interface we need to expose for our handshake/message sending
   - Still need to document this

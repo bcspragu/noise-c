@@ -95,6 +95,7 @@ void report_error(const char *file, long line, int err)
     fprintf(stderr, "Internal error (%s:%ld): %s\n", file, line, errstr);
 }
 
+#if defined(__EMSCRIPTEN__)
 // Note: This function is added as a shim so Emscripten doesn't fail with:
 //
 //   wasm-ld: error: keytool.o: undefined symbol: getpass
@@ -110,6 +111,7 @@ char *getpass(const char *prompt) {
         *newline = '\0';
     return buf;
 }
+#endif
 
 char *ask_for_passphrase(int confirm)
 {

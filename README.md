@@ -23,20 +23,18 @@ TODO
 ```bash
 # TODO: libsodium stuff should probably go here.
 emconfigure ./configure
-emmake make
+emmake make -e CFLAGS='-O3 -g -pthread'
 
 # No idea if this is actually how things should be, I do wonder if I'm just messing up the automake files.
-# NOTE: -O3 got rid of _malloc, e.g. https://github.com/emscripten-core/emscripten/issues/6882
-emcc -O2 src/noise-c.o \
+emcc -O3 src/noise-c.o \
   -o output.mjs \
   -sSINGLE_FILE \
-  -Lsrc \
-  -Lsrc/protocol \
-  -lnoise \
-  -lnoiseprotocol \
-  -sEXPORTED_FUNCTIONS=_start_handshake,_continue_handshake,_finish_handshake,_malloc,_free \
-  -ssEXPORTED_RUNTIME_METHODS=cwrap,getValue,UTF8ToString,stringToUTF8 \
-  -sMODULARIZE
+  -Lsrc -Lsrc/protocol \
+  -lnoise -lnoiseprotocol \
+  -sEXPORTED_FUNCTIONS=_start_handshake,_continue_handshake,_finish_handshake,_encrypt_message,_decrypt_message,_malloc,_free \
+  -sEXPORTED_RUNTIME_METHODS=cwrap,getValue,UTF8ToString,stringToUTF8 \
+  -sMODULARIZE \
+  -sENVIRONMENT=web
 ```
 
 Noise-C Library

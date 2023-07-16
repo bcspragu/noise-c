@@ -10,6 +10,7 @@ TODO
 - [ ] Add message padding support
   - This also requires good randomness, so make sure that part works (see below)
 - [ ] Figure out how to build for WASM against libsodium
+  - Or figure out if the reference backend is fine for our usecase
 - [ ] Make output as small/minimal as possible
 - [ ] Figure out if /dev/urandom usage is an acceptable source of entropy in Emscripten
   - Should generate a bunch of random numbers with it and run through some test suite, use different browsers.
@@ -21,7 +22,6 @@ TODO
 ## Building WASM
 
 ```bash
-# TODO: libsodium stuff should probably go here.
 emconfigure ./configure
 emmake make -e CFLAGS='-O3 -g -pthread'
 

@@ -6,7 +6,7 @@
 #include <noise/protocol.h>
 
 /* Message buffer for send/receive */
-#define MAX_MESSAGE_LEN 4096
+#define MAX_MESSAGE_LEN 32768
 static uint8_t message_buffer[MAX_MESSAGE_LEN];
 
 #define ERROR_CODE_NOISE_INIT        0x01
@@ -120,7 +120,7 @@ typedef struct {
     // HandshakeState *hs;
 } ContinueHandshakeResponse;
 
-ContinueHandshakeResponse *continue_handshake(uint8_t *message, size_t message_size) {
+ContinueHandshakeResponse *continue_handshake(uint8_t *message, size_t message_size, uint8_t *payload, size_t payload_size) {
     ContinueHandshakeResponse *resp = malloc(sizeof(ContinueHandshakeResponse));
 
     int err = noise_init();
@@ -178,7 +178,7 @@ ContinueHandshakeResponse *continue_handshake(uint8_t *message, size_t message_s
         return resp;
     }
     
-    // Our second action should be to write our responder's part of the handshake.
+    // Our second action should be to write our responder's part of the handshake, along with our payload.
     action = noise_handshakestate_get_action(handshake);
     if (action != NOISE_ACTION_WRITE_MESSAGE) {
         fprintf(stderr, "unexpected action %d\n", action);
@@ -186,8 +186,10 @@ ContinueHandshakeResponse *continue_handshake(uint8_t *message, size_t message_s
         return resp;
     }
 
+    NoiseBuffer mbuf_payload;
+    noise_buffer_set_input(mbuf_payload, payload, payload_size);
     noise_buffer_set_output(mbuf, message_buffer, sizeof(message_buffer));
-    err = noise_handshakestate_write_message(handshake, &mbuf, NULL);
+    err = noise_handshakestate_write_message(handshake, &mbuf, &mbuf_payload);
     if (err != NOISE_ERROR_NONE) {
         noise_perror("write handshake", err);
         resp->error_code = ERROR_CODE_WRITE_MESSAGE;
@@ -225,6 +227,12 @@ int main() {
 
 typedef struct {
     uint32_t error_code;
+
+    // Unlike previous responses, this is actual user message data, not Noise handshake data.
+    // It's the user info the responder set back in continue_handshake.
+    size_t payload_size;
+    uint8_t *payload;
+
     // TODO: Figure out how to do this correctly.
     // HandshakeState *hs;
 } FinishHandshakeResponse;
@@ -247,9 +255,11 @@ FinishHandshakeResponse *finish_handshake(uint8_t *message, size_t message_size)
         return resp;
     }
 
+    NoiseBuffer mbuf_payload;
     NoiseBuffer mbuf;
     noise_buffer_set_input(mbuf, message, message_size);
-    int err = noise_handshakestate_read_message(handshake, &mbuf, NULL);
+    noise_buffer_set_output(mbuf_payload, message_buffer, sizeof(message_buffer));
+    int err = noise_handshakestate_read_message(handshake, &mbuf, &mbuf_payload);
     if (err != NOISE_ERROR_NONE) {
         noise_perror("read handshake", err);
         resp->error_code = ERROR_CODE_READ_MESSAGE;
@@ -272,6 +282,10 @@ FinishHandshakeResponse *finish_handshake(uint8_t *message, size_t message_size)
         resp->error_code = ERROR_CODE_SPLIT_FAILED;
         return resp;
     }
+
+    resp->payload_size = mbuf_payload.size;
+    resp->payload = &message_buffer[0];
+    resp->error_code = 0;
 
     return resp;
 }

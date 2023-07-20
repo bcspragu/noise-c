@@ -20,7 +20,8 @@ static uint8_t message_buffer[MAX_MESSAGE_LEN];
 #define ERROR_CODE_NO_GLOBAL_STATE   0x09
 #define ERROR_CODE_ENCRYPT_FAILED    0x0A
 #define ERROR_CODE_DECRYPT_FAILED    0x0B
-// #define ERROR_CODE_IX                0x0C
+#define ERROR_CODE_BAD_PSK           0x0C
+#define ERROR_CODE_SET_PSK           0x0D
 
 // TODO: Remove this egregious hack, it's just to test the handshake before we have support for serializing/saving handshake data.
 static NoiseHandshakeState *global_handshake;
@@ -44,8 +45,14 @@ typedef struct {
     // HandshakeState *hs;
 } StartHandshakeResponse;
 
-StartHandshakeResponse *start_handshake() {
+StartHandshakeResponse *start_handshake(uint8_t *psk, size_t psk_size, uint8_t *payload, size_t payload_size) {
     StartHandshakeResponse *resp = malloc(sizeof(StartHandshakeResponse));
+
+    if (psk_size != NOISE_PSK_LEN) {
+        noise_perror("PSK had wrong length", NOISE_ERROR_INVALID_LENGTH);
+        resp->error_code = ERROR_CODE_BAD_PSK;
+        return resp;
+    }
 
     int err = noise_init();
     if (err != NOISE_ERROR_NONE) {
@@ -55,7 +62,7 @@ StartHandshakeResponse *start_handshake() {
     }
 
     NoiseHandshakeState *handshake;
-    char *protocol = "Noise_NN_25519_ChaChaPoly_BLAKE2s";
+    char *protocol = "NoisePSK_NN_25519_ChaChaPoly_BLAKE2s";
     err = noise_handshakestate_new_by_name
         (&handshake, protocol, NOISE_ROLE_INITIATOR);
     if (err != NOISE_ERROR_NONE) {
@@ -69,6 +76,13 @@ StartHandshakeResponse *start_handshake() {
     if (err != NOISE_ERROR_NONE) {
         noise_perror(protocol, err);
         resp->error_code = ERROR_CODE_SET_PROLOGUE;
+        return resp;
+    }
+
+    err = noise_handshakestate_set_pre_shared_key(handshake, psk, psk_size);
+    if (err != NOISE_ERROR_NONE) {
+        noise_perror(protocol, err);
+        resp->error_code = ERROR_CODE_SET_PSK;
         return resp;
     }
 
@@ -94,8 +108,10 @@ StartHandshakeResponse *start_handshake() {
 
     /* Write the next handshake message with a zero-length payload */
     NoiseBuffer mbuf;
+    NoiseBuffer mbuf_payload;
+    noise_buffer_set_input(mbuf_payload, payload, payload_size);
     noise_buffer_set_output(mbuf, message_buffer, sizeof(message_buffer));
-    err = noise_handshakestate_write_message(handshake, &mbuf, NULL);
+    err = noise_handshakestate_write_message(handshake, &mbuf, &mbuf_payload);
     if (err != NOISE_ERROR_NONE) {
         noise_perror("write handshake", err);
         resp->error_code = ERROR_CODE_WRITE_MESSAGE;
@@ -114,13 +130,20 @@ StartHandshakeResponse *start_handshake() {
 
 typedef struct {
     uint32_t error_code;
+
     size_t message_size;
     uint8_t *message;
+
+    // This is actual user message data, not Noise handshake data.
+    // It's the user info the initiator sent in start_handshake.
+    size_t payload_size;
+    uint8_t *payload;
+
     // TODO: Figure out how to do this correctly.
     // HandshakeState *hs;
 } ContinueHandshakeResponse;
 
-ContinueHandshakeResponse *continue_handshake(uint8_t *message, size_t message_size, uint8_t *payload, size_t payload_size) {
+ContinueHandshakeResponse *continue_handshake(uint8_t *message, size_t message_size, uint8_t *psk, size_t psk_size, uint8_t *payload, size_t payload_size) {
     ContinueHandshakeResponse *resp = malloc(sizeof(ContinueHandshakeResponse));
 
     int err = noise_init();
@@ -131,7 +154,7 @@ ContinueHandshakeResponse *continue_handshake(uint8_t *message, size_t message_s
     }
 
     NoiseHandshakeState *handshake;
-    char *protocol = "Noise_NN_25519_ChaChaPoly_BLAKE2s";
+    char *protocol = "NoisePSK_NN_25519_ChaChaPoly_BLAKE2s";
     err = noise_handshakestate_new_by_name
         (&handshake, protocol, NOISE_ROLE_RESPONDER);
     if (err != NOISE_ERROR_NONE) {
@@ -145,6 +168,13 @@ ContinueHandshakeResponse *continue_handshake(uint8_t *message, size_t message_s
     if (err != NOISE_ERROR_NONE) {
         noise_perror(protocol, err);
         resp->error_code = ERROR_CODE_SET_PROLOGUE;
+        return resp;
+    }
+
+    err = noise_handshakestate_set_pre_shared_key(handshake, psk, psk_size);
+    if (err != NOISE_ERROR_NONE) {
+        noise_perror(protocol, err);
+        resp->error_code = ERROR_CODE_SET_PSK;
         return resp;
     }
 
@@ -169,14 +199,21 @@ ContinueHandshakeResponse *continue_handshake(uint8_t *message, size_t message_s
         return resp;
     }
 
+    NoiseBuffer mbuf_payload;
     NoiseBuffer mbuf;
     noise_buffer_set_input(mbuf, message, message_size);
-    err = noise_handshakestate_read_message(handshake, &mbuf, NULL);
+    noise_buffer_set_output(mbuf_payload, message_buffer, sizeof(message_buffer));
+    err = noise_handshakestate_read_message(handshake, &mbuf, &mbuf_payload);
     if (err != NOISE_ERROR_NONE) {
         noise_perror("read handshake", err);
         resp->error_code = ERROR_CODE_READ_MESSAGE;
         return resp;
     }
+
+    // Copy the payload to something we can return.
+    size_t out_payload_size = mbuf_payload.size;
+    uint8_t *out_payload = malloc( sizeof( uint8_t ) * out_payload_size );
+    memcpy(out_payload, message_buffer, out_payload_size);
     
     // Our second action should be to write our responder's part of the handshake, along with our payload.
     action = noise_handshakestate_get_action(handshake);
@@ -186,7 +223,6 @@ ContinueHandshakeResponse *continue_handshake(uint8_t *message, size_t message_s
         return resp;
     }
 
-    NoiseBuffer mbuf_payload;
     noise_buffer_set_input(mbuf_payload, payload, payload_size);
     noise_buffer_set_output(mbuf, message_buffer, sizeof(message_buffer));
     err = noise_handshakestate_write_message(handshake, &mbuf, &mbuf_payload);
@@ -215,6 +251,8 @@ ContinueHandshakeResponse *continue_handshake(uint8_t *message, size_t message_s
 
     resp->message_size = mbuf.size;
     resp->message = &message_buffer[0];
+    resp->payload = out_payload;
+    resp->payload_size = out_payload_size;
     resp->error_code = 0;
     // resp->handshake = handshake;
 
@@ -222,14 +260,14 @@ ContinueHandshakeResponse *continue_handshake(uint8_t *message, size_t message_s
 }
 
 int main() {
-    start_handshake();
+    // start_handshake();
 }
 
 typedef struct {
     uint32_t error_code;
 
-    // Unlike previous responses, this is actual user message data, not Noise handshake data.
-    // It's the user info the responder set back in continue_handshake.
+    // This is actual user message data, not Noise handshake data.
+    // It's the user info the responder sent back in continue_handshake.
     size_t payload_size;
     uint8_t *payload;
 

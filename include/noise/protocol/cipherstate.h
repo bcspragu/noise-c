@@ -30,6 +30,7 @@ extern "C" {
 #endif
 
 typedef struct NoiseCipherState_s NoiseCipherState;
+typedef struct NoiseCipherStateExport_s NoiseCipherStateExport;
 
 int noise_cipherstate_new_by_id(NoiseCipherState **state, int id);
 int noise_cipherstate_new_by_name(NoiseCipherState **state, const char *name);
@@ -48,6 +49,8 @@ int noise_cipherstate_decrypt_with_ad
      NoiseBuffer *buffer);
 int noise_cipherstate_encrypt(NoiseCipherState *state, NoiseBuffer *buffer);
 int noise_cipherstate_decrypt(NoiseCipherState *state, NoiseBuffer *buffer);
+int noise_cipherstate_export(NoiseCipherState *state, NoiseCipherStateExport *export);
+int noise_cipherstate_import(uint8_t *cipher_state, size_t cipher_state_size, NoiseCipherState **state);
 int noise_cipherstate_set_nonce(NoiseCipherState *state, uint64_t nonce);
 int noise_cipherstate_get_max_key_length(void);
 int noise_cipherstate_get_max_mac_length(void);

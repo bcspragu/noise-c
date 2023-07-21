@@ -22,27 +22,22 @@ static uint8_t message_buffer[MAX_MESSAGE_LEN];
 #define ERROR_CODE_DECRYPT_FAILED    0x0B
 #define ERROR_CODE_BAD_PSK           0x0C
 #define ERROR_CODE_SET_PSK           0x0D
+#define ERROR_CODE_CS_EXPORT         0x0E
+#define ERROR_CODE_CS_IMPORT         0x0F
 
 // TODO: Remove this egregious hack, it's just to test the handshake before we have support for serializing/saving handshake data.
 static NoiseHandshakeState *global_handshake;
 
-static NoiseCipherState *send_cipher;
-static NoiseCipherState *recv_cipher;
-
-// TODO: Fill this out with the state we need to serialize.
-typedef struct {
-    // Symmetric state
-    uint8_t ck[64];
-    uint8_t h[64];
-
-} HandshakeState;
-
 typedef struct {
     uint32_t error_code;
+
+    // Handshake data, to be sent to responder
     size_t message_size;
     uint8_t *message;
-    // TODO: Figure out how to do this correctly.
-    // HandshakeState *hs;
+
+    // Serialized handshake state, needed for finish_handshake
+    size_t handshake_state_size;
+    uint8_t *handshake_state;
 } StartHandshakeResponse;
 
 StartHandshakeResponse *start_handshake(uint8_t *psk, size_t psk_size, uint8_t *payload, size_t payload_size) {
@@ -121,7 +116,9 @@ StartHandshakeResponse *start_handshake(uint8_t *psk, size_t psk_size, uint8_t *
     resp->message_size = mbuf.size;
     resp->message = &message_buffer[0];
     resp->error_code = 0;
-    // resp->handshake = handshake;
+    // TODO:
+    // resp->handshake_state_size = ??
+    // resp->handshake_state = ??
 
     global_handshake = handshake;
 
@@ -131,6 +128,7 @@ StartHandshakeResponse *start_handshake(uint8_t *psk, size_t psk_size, uint8_t *
 typedef struct {
     uint32_t error_code;
 
+    // Handshake data, to be sent to initiator
     size_t message_size;
     uint8_t *message;
 
@@ -139,8 +137,13 @@ typedef struct {
     size_t payload_size;
     uint8_t *payload;
 
-    // TODO: Figure out how to do this correctly.
-    // HandshakeState *hs;
+    // Serialized send cipher state, needed for encrypt_message
+    size_t send_cipher_state_size;
+    uint8_t *send_cipher_state;
+
+    // Serialized recv cipher state, needed for decrypt_message
+    size_t recv_cipher_state_size;
+    uint8_t *recv_cipher_state;
 } ContinueHandshakeResponse;
 
 ContinueHandshakeResponse *continue_handshake(uint8_t *message, size_t message_size, uint8_t *psk, size_t psk_size, uint8_t *payload, size_t payload_size) {
@@ -178,11 +181,11 @@ ContinueHandshakeResponse *continue_handshake(uint8_t *message, size_t message_s
         return resp;
     }
 
-    // The NN handshake only uses ephemeral keys, e.g.
-    //   -> e 
+    // The NNpsk0 handshake looks like.
+    //   -> psk, e 
     //   <- e, ee
-    // NoiseDHState *dh = noise_handshakestate_get_fixed_ephemeral_dh(handshake);
-    // size_t key_len = noise_dhstate_generate_keypair(dh);
+    //
+    // So here, we read the initator's message, respond with our own, and we're ready to send messages.
 
     err = noise_handshakestate_start(handshake);
     if (err != NOISE_ERROR_NONE) {
@@ -210,7 +213,7 @@ ContinueHandshakeResponse *continue_handshake(uint8_t *message, size_t message_s
         return resp;
     }
 
-    // Copy the payload to something we can return.
+    // Copy the payload to something we can return so we can reuse the buffer.
     size_t out_payload_size = mbuf_payload.size;
     uint8_t *out_payload = malloc( sizeof( uint8_t ) * out_payload_size );
     memcpy(out_payload, message_buffer, out_payload_size);
@@ -240,8 +243,8 @@ ContinueHandshakeResponse *continue_handshake(uint8_t *message, size_t message_s
         return resp;
     }
 
-    // NoiseCipherState *send_cipher = 0;
-    // NoiseCipherState *recv_cipher = 0;
+    NoiseCipherState *send_cipher = 0;
+    NoiseCipherState *recv_cipher = 0;
     err = noise_handshakestate_split(handshake, &send_cipher, &recv_cipher);
     if (err != NOISE_ERROR_NONE) {
         noise_perror("split to start data transfer", err);
@@ -249,18 +252,36 @@ ContinueHandshakeResponse *continue_handshake(uint8_t *message, size_t message_s
         return resp;
     }
 
+    NoiseCipherStateExport send_exp;
+    NoiseCipherStateExport recv_exp;
+    err = noise_cipherstate_export(send_cipher, &send_exp);
+    if (err != NOISE_ERROR_NONE) {
+        noise_perror("failed to export send cipher state", err);
+        resp->error_code = ERROR_CODE_CS_EXPORT;
+        return resp;
+    }
+    err = noise_cipherstate_export(recv_cipher, &recv_exp);
+    if (err != NOISE_ERROR_NONE) {
+        noise_perror("failed to export recv cipher state", err);
+        resp->error_code = ERROR_CODE_CS_EXPORT;
+        return resp;
+    }
+
     resp->message_size = mbuf.size;
     resp->message = &message_buffer[0];
+
     resp->payload = out_payload;
     resp->payload_size = out_payload_size;
+
+    resp->send_cipher_state_size = send_exp.data_size;
+    resp->send_cipher_state = send_exp.data;
+
+    resp->recv_cipher_state_size = recv_exp.data_size;
+    resp->recv_cipher_state = recv_exp.data;
+
     resp->error_code = 0;
-    // resp->handshake = handshake;
 
-    return resp;
-}
-
-int main() {
-    // start_handshake();
+   return resp;
 }
 
 typedef struct {
@@ -271,11 +292,16 @@ typedef struct {
     size_t payload_size;
     uint8_t *payload;
 
-    // TODO: Figure out how to do this correctly.
-    // HandshakeState *hs;
+    // Serialized send cipher state, needed for encrypt_message
+    size_t send_cipher_state_size;
+    uint8_t *send_cipher_state;
+
+    // Serialized recv cipher state, needed for decrypt_message
+    size_t recv_cipher_state_size;
+    uint8_t *recv_cipher_state;
 } FinishHandshakeResponse;
 
-FinishHandshakeResponse *finish_handshake(uint8_t *message, size_t message_size) {
+FinishHandshakeResponse *finish_handshake(uint8_t *handshake_state, size_t handshake_state_size, uint8_t *message, size_t message_size) {
     FinishHandshakeResponse *resp = malloc(sizeof(FinishHandshakeResponse));
 
     if (!global_handshake) {
@@ -283,6 +309,7 @@ FinishHandshakeResponse *finish_handshake(uint8_t *message, size_t message_size)
         return resp;
     }
 
+    // TODO: Use handshake_state instead
     NoiseHandshakeState *handshake = global_handshake;
 
     // Our first action is to read the responder's part of the handshake.
@@ -312,8 +339,8 @@ FinishHandshakeResponse *finish_handshake(uint8_t *message, size_t message_size)
         return resp;
     }
 
-    // NoiseCipherState *send_cipher = 0;
-    // NoiseCipherState *recv_cipher = 0;
+    NoiseCipherState *send_cipher = 0;
+    NoiseCipherState *recv_cipher = 0;
     err = noise_handshakestate_split(handshake, &send_cipher, &recv_cipher);
     if (err != NOISE_ERROR_NONE) {
         noise_perror("split to start data transfer", err);
@@ -321,8 +348,30 @@ FinishHandshakeResponse *finish_handshake(uint8_t *message, size_t message_size)
         return resp;
     }
 
+    NoiseCipherStateExport send_exp;
+    NoiseCipherStateExport recv_exp;
+    err = noise_cipherstate_export(send_cipher, &send_exp);
+    if (err != NOISE_ERROR_NONE) {
+        noise_perror("failed to export send cipher state", err);
+        resp->error_code = ERROR_CODE_CS_EXPORT;
+        return resp;
+    }
+    err = noise_cipherstate_export(recv_cipher, &recv_exp);
+    if (err != NOISE_ERROR_NONE) {
+        noise_perror("failed to export recv cipher state", err);
+        resp->error_code = ERROR_CODE_CS_EXPORT;
+        return resp;
+    }
+
     resp->payload_size = mbuf_payload.size;
     resp->payload = &message_buffer[0];
+
+    resp->send_cipher_state_size = send_exp.data_size;
+    resp->send_cipher_state = send_exp.data;
+
+    resp->recv_cipher_state_size = recv_exp.data_size;
+    resp->recv_cipher_state = recv_exp.data;
+
     resp->error_code = 0;
 
     return resp;
@@ -330,30 +379,49 @@ FinishHandshakeResponse *finish_handshake(uint8_t *message, size_t message_size)
 
 typedef struct {
     uint32_t error_code;
+
     size_t message_size;
     uint8_t *message;
+
+    size_t send_cipher_state_size;
+    uint8_t *send_cipher_state;
 } EncryptMessageResponse;
 
-EncryptMessageResponse *encrypt_message(uint8_t *message, size_t message_size) {
+EncryptMessageResponse *encrypt_message(uint8_t *cipher_state, size_t cipher_state_size, uint8_t *message, size_t message_size) {
     EncryptMessageResponse *resp = malloc(sizeof(EncryptMessageResponse));
 
-    if (!send_cipher || !recv_cipher) {
-        resp->error_code = ERROR_CODE_NO_GLOBAL_STATE;
+    NoiseCipherState *send_cipher = 0;
+    int err = noise_cipherstate_import(cipher_state, cipher_state_size, &send_cipher);
+    if (err != NOISE_ERROR_NONE) {
+        noise_perror("import failed", err);
+        resp->error_code = ERROR_CODE_CS_IMPORT;
         return resp;
     }
 
     NoiseBuffer mbuf;
     memcpy(message_buffer, message, message_size);
     noise_buffer_set_inout(mbuf, message_buffer, message_size, sizeof(message_buffer));
-    int err = noise_cipherstate_encrypt(send_cipher, &mbuf);
+    err = noise_cipherstate_encrypt(send_cipher, &mbuf);
     if (err != NOISE_ERROR_NONE) {
         noise_perror("encryption failed", err);
         resp->error_code = ERROR_CODE_ENCRYPT_FAILED;
         return resp;
     }
+
+    NoiseCipherStateExport send_exp;
+    err = noise_cipherstate_export(send_cipher, &send_exp);
+    if (err != NOISE_ERROR_NONE) {
+        noise_perror("failed to send_export send cipher state", err);
+        resp->error_code = ERROR_CODE_CS_EXPORT;
+        return resp;
+    }
    
     resp->message_size = mbuf.size;
     resp->message = mbuf.data;
+
+    resp->send_cipher_state_size = send_exp.data_size;
+    resp->send_cipher_state = send_exp.data;
+
     resp->error_code = 0;
 
     return resp;
@@ -363,29 +431,51 @@ typedef struct {
     uint32_t error_code;
     size_t message_size;
     uint8_t *message;
+
+    size_t recv_cipher_state_size;
+    uint8_t *recv_cipher_state;
 } DecryptMessageResponse;
 
-DecryptMessageResponse *decrypt_message(uint8_t *message, size_t message_size) {
+DecryptMessageResponse *decrypt_message(uint8_t *cipher_state, size_t cipher_state_size, uint8_t *message, size_t message_size) {
     DecryptMessageResponse *resp = malloc(sizeof(DecryptMessageResponse));
 
-    if (!send_cipher || !recv_cipher) {
-        resp->error_code = ERROR_CODE_NO_GLOBAL_STATE;
+    NoiseCipherState *recv_cipher = 0;
+    int err = noise_cipherstate_import(cipher_state, cipher_state_size, &recv_cipher);
+    if (err != NOISE_ERROR_NONE) {
+        noise_perror("import failed", err);
+        resp->error_code = ERROR_CODE_CS_IMPORT;
         return resp;
     }
 
     NoiseBuffer mbuf;
     memcpy(message_buffer, message, message_size);
     noise_buffer_set_inout(mbuf, message_buffer, message_size, sizeof(message_buffer));
-    int err = noise_cipherstate_decrypt(recv_cipher, &mbuf);
+    err = noise_cipherstate_decrypt(recv_cipher, &mbuf);
     if (err != NOISE_ERROR_NONE) {
         noise_perror("decryption failed", err);
         resp->error_code = ERROR_CODE_DECRYPT_FAILED;
         return resp;
     }
+
+    NoiseCipherStateExport recv_exp;
+    err = noise_cipherstate_export(recv_cipher, &recv_exp);
+    if (err != NOISE_ERROR_NONE) {
+        noise_perror("failed to export recv cipher state", err);
+        resp->error_code = ERROR_CODE_CS_EXPORT;
+        return resp;
+    }
    
     resp->message_size = mbuf.size;
     resp->message = mbuf.data;
+
+    resp->recv_cipher_state_size = recv_exp.data_size;
+    resp->recv_cipher_state = recv_exp.data;
+
     resp->error_code = 0;
 
     return resp;
+}
+
+int main() {
+    // start_handshake();
 }

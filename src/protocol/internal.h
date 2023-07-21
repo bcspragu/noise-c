@@ -52,6 +52,13 @@ extern "C" {
  */
 #define NOISE_PSK_LEN 32
 
+
+struct NoiseCipherStateExport_s {
+  size_t data_size;
+  uint8_t *data;
+  int error;
+};
+
 /**
  * \brief Internal structure of the NoiseCipherState type.
  */
@@ -65,6 +72,14 @@ struct NoiseCipherState_s
 
     /** \brief Non-zero if the key has been set on this cipher */
     uint8_t has_key;
+
+    /**
+     * \brief The key value for the next packet
+     *
+     * WARNING: This is a modification of the original Noise-C library, the key
+     * is exposed so that we can have conversations across browser sessions.
+     */
+    uint8_t *k;
 
     /** \brief Length of the key for this cipher in bytes */
     uint8_t key_len;

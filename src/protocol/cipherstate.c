@@ -21,7 +21,10 @@
  */
 
 #include "internal.h"
+#include "noise/protocol/cipherstate.h"
+#include "noise/protocol/constants.h"
 #include <string.h>
+#include <stdlib.h>
 
 /**
  * \file cipherstate.h
@@ -230,6 +233,8 @@ int noise_cipherstate_init_key
     /* Set the key */
     (*(state->init_key))(state, key);
     state->has_key = 1;
+    state->k = malloc(key_len);
+    memcpy(state->k, key, key_len);
     state->n = 0;
     return NOISE_ERROR_NONE;
 }
@@ -494,6 +499,73 @@ int noise_cipherstate_encrypt(NoiseCipherState *state, NoiseBuffer *buffer)
 int noise_cipherstate_decrypt(NoiseCipherState *state, NoiseBuffer *buffer)
 {
     return noise_cipherstate_decrypt_with_ad(state, NULL, 0, buffer);
+}
+
+int noise_cipherstate_import(uint8_t *cipher_state, size_t cipher_state_size, NoiseCipherState **state) {
+    // Eight bytes for the nonce, and at least 16 for the key
+    if (cipher_state_size < 24) {
+        return NOISE_ERROR_INVALID_LENGTH;
+    }
+
+    uint64_t nonce = ((uint64_t)cipher_state[0]) << 56
+    | ((uint64_t)cipher_state[1]) << 48
+    | ((uint64_t)cipher_state[2]) << 40
+    | ((uint64_t)cipher_state[3]) << 32
+    | ((uint64_t)cipher_state[4]) << 24
+    | ((uint64_t)cipher_state[5]) << 16
+    | ((uint64_t)cipher_state[6]) << 8
+    | ((uint64_t)cipher_state[7]);
+
+    if (!state)
+        return NOISE_ERROR_INVALID_PARAM;
+
+    *state = noise_chachapoly_new();
+
+    if (!(*state))
+        return NOISE_ERROR_NO_MEMORY;
+
+    int err = noise_cipherstate_init_key(*state, cipher_state + 8, cipher_state_size - 8);
+    if (err != NOISE_ERROR_NONE)
+        return err;
+
+    err = noise_cipherstate_set_nonce(*state, nonce);
+    if (err != NOISE_ERROR_NONE)
+        return err;
+
+    return NOISE_ERROR_NONE;
+}
+
+int noise_cipherstate_export(NoiseCipherState *state, NoiseCipherStateExport *export) {
+    if (state->key_len < 16) {
+        return NOISE_ERROR_INVALID_LENGTH;
+    }
+    /* Bail out if the state is NULL */
+    if (!state) {
+        return NOISE_ERROR_INVALID_PARAM;
+    }
+
+    /* If the key hasn't been set yet, we cannot do this */
+    if (!state->has_key) {
+        return NOISE_ERROR_INVALID_STATE;
+    }
+
+    size_t data_size = 8 /* nonce */ + state->key_len;
+
+    uint8_t *data = malloc(data_size);
+    data[0] = state->n >> 56 & 0xFF;
+    data[1] = state->n >> 48 & 0xFF;
+    data[2] = state->n >> 40 & 0xFF;
+    data[3] = state->n >> 32 & 0xFF;
+    data[4] = state->n >> 24 & 0xFF;
+    data[5] = state->n >> 16 & 0xFF;
+    data[6] = state->n >> 8 & 0xFF;
+    data[7] = state->n & 0xFF;
+    memcpy(data + 8, state->k, state->key_len);
+
+    export->data_size = data_size;
+    export->data = data;
+
+    return NOISE_ERROR_NONE;
 }
 
 /**

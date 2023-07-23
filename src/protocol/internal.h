@@ -56,7 +56,6 @@ extern "C" {
 struct NoiseCipherStateExport_s {
   size_t data_size;
   uint8_t *data;
-  int error;
 };
 
 /**
@@ -598,6 +597,11 @@ struct NoiseHandshakeState_s
 
     /** \brief Length of the prologue value in bytes */
     size_t prologue_len;
+};
+
+struct NoiseHandshakeStateExport_s {
+  size_t data_size;
+  uint8_t *data;
 };
 
 /* Handshake message pattern tokens (must be single-byte values) */

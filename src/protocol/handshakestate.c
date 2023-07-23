@@ -1780,3 +1780,39 @@ int noise_handshakestate_get_handshake_hash
 }
 
 /**@}*/
+
+int noise_handshakestate_import(uint8_t *cipher_state, size_t cipher_state_size, NoiseHandshakeState **state) {
+    return NOISE_ERROR_NONE;
+}
+
+int noise_handshakestate_export(NoiseHandshakeState *state, NoiseHandshakeStateExport *export) {
+    // We make a bunch of assumptions that don't make this useful for general purpose. Specifically:
+    // 1. We assume a pattern (noise_pattern_NN)
+    // 2. We assume a noise protocol ID
+
+    // 2 byte for role (NOISE_ID)
+    // 1 byte for requirements
+    // 2 bytes for action (NOISE_ID)
+    // -- SymmetricState
+    // 2  bytes for cipher state size
+    // N bytes for cipher state 
+
+    NoiseCipherStateExport *exp = 0;
+    int err = noise_cipherstate_export(state->symmetric->cipher, exp);
+    if (err != NOISE_ERROR_NONE) {
+        return err;
+    }
+    size_t data_size = 7 + exp->data_size;
+
+    uint8_t *data = malloc(data_size);
+
+    data[0] = (state->role >> 8) & 0xFF;
+    data[1] = state->role & 0xFF;
+
+    data[2] = state->requirements;
+
+    data[3] = (state->action >> 8) & 0xFF;
+    data[4] = state->action & 0xFF;
+
+    return NOISE_ERROR_NONE;
+}

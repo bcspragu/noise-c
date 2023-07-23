@@ -31,6 +31,7 @@ extern "C" {
 #endif
 
 typedef struct NoiseHandshakeState_s NoiseHandshakeState;
+typedef struct NoiseHandshakeStateExport_s NoiseHandshakeStateExport;
 
 int noise_handshakestate_new_by_id
     (NoiseHandshakeState **state, const NoiseProtocolId *protocol_id, int role);
@@ -70,6 +71,8 @@ int noise_handshakestate_split
     (NoiseHandshakeState *state, NoiseCipherState **send, NoiseCipherState **receive);
 int noise_handshakestate_get_handshake_hash
     (const NoiseHandshakeState *state, uint8_t *hash, size_t max_len);
+int noise_handshakestate_export(NoiseHandshakeState *state, NoiseHandshakeStateExport *export);
+int noise_handshakestate_import(uint8_t *cipher_state, size_t cipher_state_size, NoiseHandshakeState **state);
 
 #ifdef __cplusplus
 };

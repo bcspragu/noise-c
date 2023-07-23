@@ -24,9 +24,8 @@ static uint8_t message_buffer[MAX_MESSAGE_LEN];
 #define ERROR_CODE_SET_PSK           0x0D
 #define ERROR_CODE_CS_EXPORT         0x0E
 #define ERROR_CODE_CS_IMPORT         0x0F
-
-// TODO: Remove this egregious hack, it's just to test the handshake before we have support for serializing/saving handshake data.
-static NoiseHandshakeState *global_handshake;
+#define ERROR_CODE_HS_EXPORT         0x10
+#define ERROR_CODE_HS_IMPORT         0x11
 
 typedef struct {
     uint32_t error_code;
@@ -113,14 +112,20 @@ StartHandshakeResponse *start_handshake(uint8_t *psk, size_t psk_size, uint8_t *
         return resp;
     }
 
+    
+    NoiseHandshakeStateExport exp;
+    err = noise_handshakestate_export(handshake, &exp);
+    if (err != NOISE_ERROR_NONE) {
+        noise_perror("failed to export handshake state", err);
+        resp->error_code = ERROR_CODE_HS_EXPORT;
+        return resp;
+    }
+
     resp->message_size = mbuf.size;
     resp->message = &message_buffer[0];
+    resp->handshake_state_size = exp.data_size;
+    resp->handshake_state = exp.data;
     resp->error_code = 0;
-    // TODO:
-    // resp->handshake_state_size = ??
-    // resp->handshake_state = ??
-
-    global_handshake = handshake;
 
     return resp;
 }
@@ -304,13 +309,13 @@ typedef struct {
 FinishHandshakeResponse *finish_handshake(uint8_t *handshake_state, size_t handshake_state_size, uint8_t *message, size_t message_size) {
     FinishHandshakeResponse *resp = malloc(sizeof(FinishHandshakeResponse));
 
-    if (!global_handshake) {
-        resp->error_code = ERROR_CODE_NO_GLOBAL_STATE;
+    NoiseHandshakeState *handshake = 0;
+    int err = noise_handshakestate_import(handshake_state, handshake_state_size, &handshake);
+    if (err != NOISE_ERROR_NONE) {
+        noise_perror("import failed", err);
+        resp->error_code = ERROR_CODE_HS_IMPORT;
         return resp;
     }
-
-    // TODO: Use handshake_state instead
-    NoiseHandshakeState *handshake = global_handshake;
 
     // Our first action is to read the responder's part of the handshake.
     int action = noise_handshakestate_get_action(handshake);
@@ -324,7 +329,7 @@ FinishHandshakeResponse *finish_handshake(uint8_t *handshake_state, size_t hands
     NoiseBuffer mbuf;
     noise_buffer_set_input(mbuf, message, message_size);
     noise_buffer_set_output(mbuf_payload, message_buffer, sizeof(message_buffer));
-    int err = noise_handshakestate_read_message(handshake, &mbuf, &mbuf_payload);
+    err = noise_handshakestate_read_message(handshake, &mbuf, &mbuf_payload);
     if (err != NOISE_ERROR_NONE) {
         noise_perror("read handshake", err);
         resp->error_code = ERROR_CODE_READ_MESSAGE;

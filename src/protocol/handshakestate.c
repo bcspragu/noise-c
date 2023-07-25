@@ -21,6 +21,7 @@
  */
 
 #include "internal.h"
+#include "noise/protocol/constants.h"
 #include <string.h>
 #include <stdlib.h>
 
@@ -1781,38 +1782,147 @@ int noise_handshakestate_get_handshake_hash
 
 /**@}*/
 
-int noise_handshakestate_import(uint8_t *cipher_state, size_t cipher_state_size, NoiseHandshakeState **state) {
+int noise_handshakestate_import(uint8_t *handshake_state, size_t handshake_state_size, NoiseHandshakeState **handshake) {
+    size_t min_size = 6 +
+        NOISE_PSK_LEN +
+        NOISE_MAX_HASHLEN +
+        NOISE_MAX_HASHLEN +
+        24 /* min cipherstate size */ +
+        16 + 16 /* lower bound on key sizing */;
+    if (handshake_state_size < min_size)
+        return NOISE_ERROR_INVALID_LENGTH;
+
+    size_t priv_key_start = 2;
+    uint16_t priv_key_len = ((uint16_t)handshake_state[0]) << 8
+        | ((uint16_t)handshake_state[1]);
+    size_t offset = priv_key_len + 2;
+
+    size_t pub_key_start = offset + 2;
+    uint16_t pub_key_len = ((uint16_t)handshake_state[offset]) << 8
+        | ((uint16_t)handshake_state[offset+1]);
+    offset += pub_key_len + 2;
+
+    size_t psk_start = offset;
+    offset += NOISE_PSK_LEN;
+
+    size_t ck_start = offset;
+    offset += NOISE_MAX_HASHLEN;
+
+    size_t hash_start = offset;
+    offset += NOISE_MAX_HASHLEN;
+
+    uint16_t cipherstate_len = ((uint16_t)handshake_state[offset]) << 8
+        | ((uint16_t)handshake_state[offset + 1]);
+    size_t cipherstate_start = offset + 2;
+
+    char *protocol = "NoisePSK_NN_25519_ChaChaPoly_BLAKE2s";
+    int err = noise_handshakestate_new_by_name
+        (handshake, protocol, NOISE_ROLE_INITIATOR);
+    if (err != NOISE_ERROR_NONE) {
+        return err;
+    }
+
+    char *prologue = "InkLinkv1";
+    err = noise_handshakestate_set_prologue(*handshake, prologue, strlen(prologue));
+    if (err != NOISE_ERROR_NONE) {
+        return err;
+    }
+
+    noise_handshakestate_set_pre_shared_key(*handshake, handshake_state + psk_start, NOISE_PSK_LEN);
+
+    noise_dhstate_new_by_id(&((*handshake)->dh_local_ephemeral), NOISE_DH_CURVE25519);
+    noise_dhstate_new_by_id(&((*handshake)->dh_remote_ephemeral), NOISE_DH_CURVE25519);
+
+    noise_dhstate_set_role((*handshake)->dh_local_ephemeral, NOISE_ROLE_INITIATOR);
+    noise_dhstate_set_role((*handshake)->dh_remote_ephemeral, NOISE_ROLE_RESPONDER);
+
+    noise_dhstate_set_keypair((*handshake)->dh_local_ephemeral,
+        handshake_state + priv_key_start, priv_key_len,
+        handshake_state + pub_key_start, pub_key_len);
+
+    memcpy(&((*handshake)->symmetric->ck[0]), handshake_state + ck_start, NOISE_MAX_HASHLEN);
+    memcpy(&((*handshake)->symmetric->h[0]), handshake_state + hash_start, NOISE_MAX_HASHLEN);
+
+    err = noise_cipherstate_import(handshake_state + cipherstate_start, cipherstate_len, &((*handshake)->symmetric->cipher));
+    if (err != NOISE_ERROR_NONE) {
+        return err;
+    }
+
+    // We need to read the responder's response from continue_handshake.
+    (*handshake)->action = NOISE_ACTION_READ_MESSAGE;
+
+    const uint8_t *pattern = noise_pattern_lookup(NOISE_PATTERN_NN);
+    (*handshake)->tokens = pattern + 3;
+
     return NOISE_ERROR_NONE;
 }
 
 int noise_handshakestate_export(NoiseHandshakeState *state, NoiseHandshakeStateExport *export) {
-    // We make a bunch of assumptions that don't make this useful for general purpose. Specifically:
-    // 1. We assume a pattern (noise_pattern_NN)
-    // 2. We assume a noise protocol ID
+    // We make a bunch of assumptions that don't make this useful for general
+    // purpose. Specifically, we assume everything (pattern, role, prologue, etc) except the
+    // variables we know we need for NNpsk0
 
-    // 2 byte for role (NOISE_ID)
-    // 1 byte for requirements
-    // 2 bytes for action (NOISE_ID)
-    // -- SymmetricState
-    // 2  bytes for cipher state size
-    // N bytes for cipher state 
+    // Local Ephemeral priv and pub
+    // PSK
+    // Symmetric ck + hash
+    // Cipherstate key and nonce
 
-    NoiseCipherStateExport *exp = 0;
-    int err = noise_cipherstate_export(state->symmetric->cipher, exp);
+    NoiseCipherStateExport exp;
+    int err = noise_cipherstate_export(state->symmetric->cipher, &exp);
     if (err != NOISE_ERROR_NONE) {
         return err;
     }
-    size_t data_size = 7 + exp->data_size;
+    // Format is:
+    //  - 2 byte Local Ephemeral Priv key len
+    //  - N byte Local Ephemeral Priv key
+    //  - 2 byte local Ephemeral Pub key len
+    //  - N byte local Ephemeral Pub key
+    //  - NOISE_PSK_LEN bytes pre-shared key
+    //  - NOISE_MAX_HASHLEN bytes chaining key
+    //  - NOISE_MAX_HASHLEN bytes handshake hash
+    //  - 2 byte length of the cipherstate
+    //  - N bytes of cipherstate key and nonce
+    size_t data_size = 6 +
+        ((size_t)state->dh_local_ephemeral->private_key_len) +
+        ((size_t)state->dh_local_ephemeral->public_key_len) +
+        NOISE_PSK_LEN + // state->pre_shared_key
+        NOISE_MAX_HASHLEN + // state->symmetric->ck
+        NOISE_MAX_HASHLEN + // state->symmetric->h
+        exp.data_size;
 
     uint8_t *data = malloc(data_size);
 
-    data[0] = (state->role >> 8) & 0xFF;
-    data[1] = state->role & 0xFF;
+    // Priv key size + priv key
+    data[0] = (state->dh_local_ephemeral->private_key_len >> 8) & 0xFF;
+    data[1] = state->dh_local_ephemeral->private_key_len & 0xFF;
+    memcpy(data + 2, state->dh_local_ephemeral->private_key, state->dh_local_ephemeral->private_key_len);
 
-    data[2] = state->requirements;
+    // Pub key size + pub key
+    size_t offset = 2 + state->dh_local_ephemeral->private_key_len;
+    data[offset] = (state->dh_local_ephemeral->public_key_len >> 8) & 0xFF;
+    data[offset + 1] = state->dh_local_ephemeral->public_key_len & 0xFF;
+    memcpy(data + offset + 2, state->dh_local_ephemeral->public_key, state->dh_local_ephemeral->public_key_len);
+    offset += 2 + state->dh_local_ephemeral->public_key_len;
 
-    data[3] = (state->action >> 8) & 0xFF;
-    data[4] = state->action & 0xFF;
+    // Pre-shared key
+    memcpy(data + offset, state->pre_shared_key, NOISE_PSK_LEN);
+    offset += NOISE_PSK_LEN;
+
+    // Chaining key
+    memcpy(data + offset, &state->symmetric->ck[0], NOISE_MAX_HASHLEN);
+    offset += NOISE_MAX_HASHLEN;
+
+    // Handshake hash
+    memcpy(data + offset, &state->symmetric->h[0], NOISE_MAX_HASHLEN);
+    offset += NOISE_MAX_HASHLEN;
+
+    // Cipherstate size + serialized cipherstate
+    data[offset] = (exp.data_size >> 8) & 0xFF;
+    data[offset + 1] = exp.data_size & 0xFF;
+    memcpy(data + offset + 2, exp.data, exp.data_size);
+
+    export->data_size = data_size;
+    export->data = data;
 
     return NOISE_ERROR_NONE;
 }

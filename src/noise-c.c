@@ -121,11 +121,13 @@ StartHandshakeResponse *start_handshake(uint8_t *psk, size_t psk_size, uint8_t *
         return resp;
     }
 
+    resp->error_code = 0;
+
     resp->message_size = mbuf.size;
     resp->message = &message_buffer[0];
+
     resp->handshake_state_size = exp.data_size;
     resp->handshake_state = exp.data;
-    resp->error_code = 0;
 
     return resp;
 }
